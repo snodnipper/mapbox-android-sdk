@@ -3,16 +3,28 @@ package com.mapbox.mapboxsdk.overlay;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
-import android.graphics.Path;
 import android.graphics.PointF;
 import android.graphics.Rect;
 import com.mapbox.mapboxsdk.geometry.LatLng;
 import com.mapbox.mapboxsdk.views.MapView;
 import com.mapbox.mapboxsdk.views.util.Projection;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 
 /**
+ * A minimal fix for PathOverlay.java in the MapBox Android SDK and Android hardware acceleration.
+ *
+ * Android Canvas Issue: Hardware accelerated Canvas cannot draw large Path objects
+ * https://code.google.com/p/android/issues/detail?id=24023
+ *
+ * The original code will work if hardware acceleration is turned off using
+ * "setLayerType(View.LAYER_TYPE_SOFTWARE, null);" in the constructor of the MapView.
+ *
+ * Romain Guy recommended Canvas.drawLines.
+ * https://stackoverflow.com/questions/15039829/drawing-paths-and-hardware-acceleration/15208783#15208783
+ *
+ * @author snodnipper
  * @author Viesturs Zarins
  * @author Martin Pearman
  *         <p/>
@@ -38,13 +50,15 @@ public class PathOverlay extends Overlay {
      * Paint settings.
      */
     protected Paint mPaint = new Paint();
-    private final Path mPath = new Path();
 
     private final PointF mTempPoint1 = new PointF();
     private final PointF mTempPoint2 = new PointF();
 
     // bounding rectangle for the current line segment.
     private final Rect mLineBounds = new Rect();
+
+    // points for canvas
+    private PointBucket mCanvasPoints = new PointBucket();
 
     public PathOverlay() {
         super();
@@ -114,6 +128,7 @@ public class PathOverlay extends Overlay {
      */
     @Override
     protected void draw(final Canvas canvas, final MapView mapView, final boolean shadow) {
+        mCanvasPoints.clear();
 
         final int size = this.mPoints.size();
 
@@ -138,7 +153,6 @@ public class PathOverlay extends Overlay {
         // clipping rectangle in the intermediate projection, to avoid performing projection.
         final Rect clipBounds = pj.fromPixelsToProjected(pj.getScreenRect());
 
-        mPath.rewind();
         boolean needsDrawing = !mOptimizePath;
         projectedPoint0 = this.mPoints.get(size - 1);
         mLineBounds.set((int) projectedPoint0.x, (int) projectedPoint0.y, (int) projectedPoint0.x,
@@ -164,7 +178,6 @@ public class PathOverlay extends Overlay {
             // bounds
             if (screenPoint0 == null) {
                 screenPoint0 = pj.toMapPixelsTranslated(projectedPoint0, this.mTempPoint1);
-                mPath.moveTo(screenPoint0.x, screenPoint0.y);
             }
 
             screenPoint1 = pj.toMapPixelsTranslated(projectedPoint1, this.mTempPoint2);
@@ -175,7 +188,7 @@ public class PathOverlay extends Overlay {
                 continue;
             }
 
-            mPath.lineTo(screenPoint1.x, screenPoint1.y);
+            mCanvasPoints.add(screenPoint0.x, screenPoint0.y, screenPoint1.x, screenPoint1.y);
             // update starting point to next position
             projectedPoint0 = projectedPoint1;
             screenPoint0.x = screenPoint1.x;
@@ -193,7 +206,7 @@ public class PathOverlay extends Overlay {
         if (needsDrawing) {
             final float realWidth = this.mPaint.getStrokeWidth();
             this.mPaint.setStrokeWidth(realWidth / mapView.getScale());
-            canvas.drawPath(mPath, this.mPaint);
+            canvas.drawLines(mCanvasPoints.getPoints(), 0, mCanvasPoints.count(), mPaint);
             this.mPaint.setStrokeWidth(realWidth);
         }
     }
@@ -204,5 +217,37 @@ public class PathOverlay extends Overlay {
      */
     public void setOptimizePath(final boolean value) {
         mOptimizePath = value;
+    }
+
+    private static class PointBucket {
+        float[] mPts = new float[64];
+        int mCount = 0;
+
+        void add(float x0, float y0, float x1, float y1) {
+            if (mCount + 4 > mPts.length) {
+                resize();
+            }
+            mPts[mCount + 0] = x0;
+            mPts[mCount + 1] = y0;
+            mPts[mCount + 2] = x1;
+            mPts[mCount + 3] = y1;
+            mCount += 4;
+        }
+
+        void clear() {
+            mCount = 0;
+        }
+
+        int count() {
+            return mCount;
+        }
+
+        float[] getPoints() {
+            return mPts;
+        }
+
+        void resize() {
+            mPts = Arrays.copyOf(mPts, mPts.length * 2);
+        }
     }
 }
